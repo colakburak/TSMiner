@@ -1,0 +1,42 @@
+version: '2.2'
+
+services:
+  # Miner
+  miner:
+    build: ./miners
+    environment:
+      - MINER_ENV_VAR=value
+    networks:
+      - mining-network
+
+  # FastAPI
+  api:
+    build: ./api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - influxdb
+    networks:
+      - mining-network
+
+  # InfluxDB Service
+  influxdb:
+    image: influxdb:latest
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_USERNAME=${DOCKER_INFLUXDB_INIT_USERNAME}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${DOCKER_INFLUXDB_INIT_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${DOCKER_INFLUXDB_INIT_ORG}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${DOCKER_INFLUXDB_INIT_BUCKET}
+    ports:
+      - "8086:8086"
+    networks:
+      - mining-network
+
+networks:
+  mining-network:
+    driver: bridge
+
+volumes:
+  influxdb-data:

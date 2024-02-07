@@ -1,0 +1,5 @@
+# Use the official InfluxDB image
+FROM influxdb:latest
+
+# Copy the configuration file into the container
+COPY config.yml /etc/influxdb2/config.yml
