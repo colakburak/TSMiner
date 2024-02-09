@@ -1,6 +1,8 @@
 import time
 import requests
 import json
+import asyncio
+import websockets
 
 from datetime import datetime
 
@@ -18,67 +20,33 @@ from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
 
+# TODO useragent rotater
+# ua = UserAgent(min_percentage=1.3)
 
+# Global variable for the WebSocket
+websocket_connection = None
 
-
-def get_html_content(url):
-    ua = UserAgent(min_percentage=1.3)
-    headers = {
-        "User-Agent": ua.random,
-        'Accept': '*/*', 
-        'Accept-Encoding': 'gzip, deflate, br', 
-        'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8'
-    }
-
+async def connect_websocket(miner_id):
+    global websocket_connection
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as errh:
-        print("Http Error:", errh)
-    except requests.exceptions.ConnectionError as errc:
-        print("Error Connecting:", errc)
-    except requests.exceptions.Timeout as errt:
-        print("Timeout Error:", errt)
-    except requests.exceptions.RequestException as err:
-        print("Oops: Something Else", err)
-    else:
-        return response.content
+        websocket_uri = f"ws://localhost:8000/ws/{miner_id}"
+        websocket_connection = await websockets.connect(websocket_uri)
+    except Exception as e:
+        print(f"Failed to connect to WebSocket: {e}")
+        # Implement reconnection logic if needed
 
-def extract_price(soup):
-    price_container = soup.find('span', class_='currency-pricestyles__Price-sc-1v249sx-0 jobFak')
-    if price_container:
-        return price_container.get_text().strip()
-    return None
+async def send_via_websocket(data, miner_id):
+    global websocket_connection
+    if not websocket_connection or not websocket_connection.open:
+        await connect_websocket(miner_id)  # Pass the miner_id
+    try:
+        await websocket_connection.send(json.dumps(data))
+    except Exception as e:
+        print(f"Error sending data: {e}")
+        # Reconnect if sending failed
+        await connect_websocket(miner_id)  # Pass the miner_id
+        await websocket_connection.send(json.dumps(data))
 
-def extract_product_name(soup):
-    product_name_container = soup.find('h1', class_='typography__StyledTypography-sc-owin6q-0 kEoLlg long-title')
-    if product_name_container:
-        return product_name_container.get_text().strip()
-    return None
-
-def main(url):
-    html_content = get_html_content(url)
-
-    if html_content:
-        soup = BeautifulSoup(html_content, 'html.parser')
-        product_name = extract_product_name(soup)
-        price = extract_price(soup)
-
-        if product_name and price:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            res = {product_name: {'price': price, 'timestamp': timestamp}}
-            # res = {product_name: price}
-            print(res)
-        else:
-            if product_name:
-                print(f"Product Name: {product_name}")
-            else:
-                print("Product name could not be found.")
-
-            if price:
-                print(f"Price: {price}")
-            else:
-                print("Price information could not be found.")
 
 def handle_cookie_popup(driver):
     try:
@@ -90,38 +58,7 @@ def handle_cookie_popup(driver):
     except Exception as e:
         print("Cookie pop-up not found or other error: ", e)
 
-def get_bitcoin_price(url):
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service)
-
-    # Open the webpage
-    driver.get(url)
-
-    handle_cookie_popup(driver)
-
-
-    # Wait for the element to load
-    WebDriverWait(driver, 2).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, ".currency-pricestyles__Price-sc-1v249sx-0.jobFak"))
-    )
-
-    # Extract the data
-    product_name = driver.find_element(By.CSS_SELECTOR, ".typography__StyledTypography-sc-owin6q-0.kEoLlg.long-title").text
-    price = driver.find_element(By.CSS_SELECTOR, ".currency-pricestyles__Price-sc-1v249sx-0.jobFak").text
-
-    # Close the WebDriver
-    driver.quit()
-    # while True:
-    #     pass
-
-    # Get the timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    print({product_name: {'price': price, 'timestamp': timestamp}})
-    # Return the result
-    return {product_name: {'price': price, 'timestamp': timestamp}}
-
-def monitor_bitcoin_price(url):
+async def monitor_bitcoin_price(url, miner_id):
     # Set Chrome options for headless mode
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -135,8 +72,6 @@ def monitor_bitcoin_price(url):
     driver.get(url)
     handle_cookie_popup(driver)
 
-    last_price = None
-
     while True:
         try:
             # Wait for the element to load
@@ -148,22 +83,13 @@ def monitor_bitcoin_price(url):
             product_name = driver.find_element(By.CSS_SELECTOR, ".typography__StyledTypography-sc-owin6q-0.kEoLlg.long-title").text
             price = driver.find_element(By.CSS_SELECTOR, ".currency-pricestyles__Price-sc-1v249sx-0.jobFak").text
 
-            # Compare with the last price
-            if price != last_price:
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                data = {product_name: {'price': price, 'timestamp': timestamp}}
-                print(data)
-                response = requests.post('http://0.0.0.0:8000/data', json=data)
-                # Check the response
-                if response.status_code == 200:
-                    print("Data sent successfully")
-                else:
-                    print("Failed to send data")
-
-                last_price = price
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            data = {product_name: {'price_in_usd': price, 'timestamp': timestamp}}
+            print(data, miner_id)
+            await send_via_websocket(data, miner_id)
 
             # Wait before checking again
-            time.sleep(5)  # Check every minute, adjust as needed
+            await asyncio.sleep(5)
 
         except Exception as e:
             print("Error occurred, retrying: ", e)
@@ -174,12 +100,22 @@ def monitor_bitcoin_price(url):
             handle_cookie_popup(driver)
 
 
-if __name__ == "__main__":
-    url = "https://www.coindesk.com/price/bitcoin/"
-    
-    # while True:
-    #     # main(url)
-    #     get_bitcoin_price(url)
-    #     time.sleep(600)
+async def main():
+    url1 = "https://www.coindesk.com/price/bitcoin/"
+    url2 = "https://www.coindesk.com/price/ethereum/"
+    url3 = "https://www.coindesk.com/price/solana/"
+    miner_id1 = 'btc-miner-01'
+    miner_id2 = 'eth-miner-01'
+    miner_id3 = 'sol-miner-01'
 
-    monitor_bitcoin_price(url)
+    # asyncio.run(monitor_bitcoin_price(url2, miner_id))
+    # asyncio.run(monitor_bitcoin_price(url, miner_id2))
+
+    await asyncio.gather(
+        monitor_bitcoin_price(url1, miner_id1),
+        monitor_bitcoin_price(url2, miner_id2),
+        monitor_bitcoin_price(url3, miner_id3)
+    )
+
+if __name__ == "__main__":
+    asyncio.run(main())

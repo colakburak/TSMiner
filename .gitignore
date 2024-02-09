@@ -12,3 +12,4 @@ user-in.json
 __pycache__/
 airflow/
 later-compose.yml
+mining_items.json

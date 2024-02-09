@@ -1,82 +1,88 @@
-from fastapi import FastAPI, HTTPException, Path, Query, Request
-from api.models import SettingsModel, Item, ResponseModel  # Assume ResponseModel is a Pydantic model for standardized responses
-from typing import List
+from typing import List, Dict
 
-from miners.bit import get_bitcoin_price
+from fastapi import FastAPI, WebSocket, HTTPException, Path, Query, Request
+from api.models import MiningItem, MiningOperationResponse, MiningItemManager
+
 from influxdb_client import InfluxDBClient, Point
 
 
-
 app = FastAPI()
+item_manager = MiningItemManager()
+
 influxdb_client = InfluxDBClient(url="http://localhost:8086", token="your-token", org="your-org")
 
 
-mining_queue = []
-
-@app.get("/", tags=["Root"], response_model=ResponseModel)
+@app.get("/", tags=["Root"])
 async def read_root():
     return {"message": "Welcome to Miner API"}
 
-@app.post("/start-mining", tags=["Mining Operations"], response_model=ResponseModel)
-async def start_mining():
-    # Logic to start mining
-    return {"status": "Mining started"}
+# ITEM operationsn
+@app.post("/items/")
+async def add_item(item: MiningItem):
+    try:
+        item_manager.add_item(item.name, item)
+        return {"message": "Item added"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/stop-mining", tags=["Mining Operations"], response_model=ResponseModel)
-async def stop_mining():
-    # Logic to stop mining
-    return {"status": "Mining stopped"}
+@app.delete("/items/{name}")
+async def delete_item(name: str):
+    try:
+        item_manager.delete_item(name)
+        return {"message": "Item deleted"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
-@app.get("/mining-status", tags=["Mining Operations"], response_model=ResponseModel)
+@app.put("/items/{name}")
+async def update_item(name: str, item: MiningItem):
+    try:
+        item_manager.update_item(name, item)
+        return {"message": "Item updated"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/items/", response_model=Dict[str, MiningItem])
+async def get_all_items():
+    return item_manager.get_all_items()
+
+# Miner Opertations
+@app.websocket("/ws/{miner_id}")
+async def websocket_endpoint(websocket: WebSocket, miner_id: str):
+    await websocket.accept()
+    print(f"Miner {miner_id} connected")
+    while True:
+        data = await websocket.receive_text()
+        print(data, miner_id)
+
+@app.post("/start-mining/{item_name}", tags=["Mining Operations"], response_model=MiningOperationResponse)
+async def start_mining(item_name: str):
+    # Logic to start mining for the specified item
+    try:
+        # Assuming a function `start_mining_operation` which starts mining based on item_name
+        # start_mining_operation(item_name)
+        return MiningOperationResponse(status="Success", message=f"Mining started for {item_name}")
+    except Exception as e:
+        return MiningOperationResponse(status="Error", message=str(e))
+
+@app.post("/stop-mining/{item_name}", tags=["Mining Operations"], response_model=MiningOperationResponse)
+async def stop_mining(item_name: str):
+    # Logic to stop mining for the specified item
+    try:
+        # Assuming a function `stop_mining_operation` which stops mining based on item_name
+        # stop_mining_operation(item_name)
+        return MiningOperationResponse(status="Success", message=f"Mining stopped for {item_name}")
+    except Exception as e:
+        return MiningOperationResponse(status="Error", message=str(e))
+
+@app.get("/mining-status", tags=["Mining Operations"])
 async def mining_status():
     # Logic to check the status of mining
     return {"status": "Mining is running"}
 
-@app.post("/data", tags=["Data Retrieval"], response_model=ResponseModel)
-async def receive_data(request: Request):
-    data = await request.json()
-    print(data)
-    return {"message": "Data received successfully"}
-
-@app.post("/configure", tags=["Configuration"], response_model=ResponseModel)
-async def configure(settings: SettingsModel):
-    # Logic to configure settings
-    return {"status": "Configuration updated"}
-
-@app.get("/health", tags=["System"], response_model=ResponseModel)
+@app.get("/health", tags=["System"])
 async def health_check():
     # Logic to check the health of the system
     return {"status": "System is healthy"}
-
-@app.post("/submit-item", tags=["Item Management"], response_model=ResponseModel)
-async def submit_item(item: Item, settings: SettingsModel):
-    try:
-        # Prepare the data point for InfluxDB
-        point = Point("mining_task").tag("item_id", item.id).field("status", "submitted").field("settings", settings.json())
-
-        # Write the point to InfluxDB
-        write_api = influxdb_client.write_api()
-        write_api.write(bucket="your-bucket", record=point)
-
-        return {"message": "Mining task submitted", "item_id": item.id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.put("/update-item/{item_id}", tags=["Item Management"], response_model=ResponseModel)
-async def update_item(item: Item, item_id: int = Path(description="The ID of the item to update")):
-    # Logic to update the item
-    return {"message": "Item updated successfully", "item": item.dict()}
-
-
-@app.delete("/delete-item/{item_id}", tags=["Item Management"], response_model=ResponseModel)
-async def delete_item(item_id: int = Path(description="The ID of the item to delete")):
-    # Logic to delete the item
-    return {"message": "Item deleted"}
-
-@app.get("/data/{item_id}", tags=["Data Retrieval"], response_model=Item)
-async def get_specific_data(item_id: int = Path(description="The ID of the specific item")):
-    # Logic to retrieve specific data
-    return {"data": "Specific data for item"}
 
 @app.get("/logs", tags=["System"], response_model=List[str])
 async def get_logs():
